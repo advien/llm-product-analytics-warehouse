@@ -63,6 +63,13 @@ MODELS = [
 # out of date relative to the finance price list (ratio old/new).
 LEGACY_PRICE_MULTIPLIER = {"gpt-4.1": 1.25, "claude-sonnet-4-5": 1.20, "gemini-2.5-flash": 1.50}
 
+# User activity model (see gen_conversations)
+ONBOARDING_BURST = 5.0        # first days are (1 + 5x) more active than steady state
+ONBOARDING_TAU_DAYS = 6.0     # ... decaying with this time constant
+TENURE_DECAY_TAU_DAYS = 240.0 # slow long-run fade of steady-state activity
+CHURN_MEAN_DAYS = 150.0       # exponential hard-churn horizon after signup
+WEEKEND_FACTOR = 0.65         # Sat/Sun activity relative to weekdays
+
 # Probability that one failed LLM call (as seen by the user) tips the
 # conversation into a human hand-off
 P_ESCALATE_PER_FAILURE = 0.20
@@ -141,20 +148,57 @@ def gen_users(rng, n_users: int, start: datetime, end: datetime) -> pd.DataFrame
 
 
 def gen_conversations(rng, users: pd.DataFrame, n_conv: int, start: datetime, end: datetime) -> pd.DataFrame:
-    window_secs = int((end - start).total_seconds())
-    # Users with more conversations: business/premium heavier; sample with weights
-    w = users["segment"].map({"retail": 1.0, "premium": 1.6, "business": 2.4}).to_numpy()
-    user_idx = rng.choice(len(users), size=n_conv, p=w / w.sum())
-    user_created = users["created_at"].to_numpy()[user_idx]
+    """Sample conversations from a per-user, per-day Poisson process.
 
-    started = start + pd.to_timedelta(rng.integers(0, window_secs, size=n_conv), unit="s")
-    # Conversations cannot precede signup: clamp forward
+    Intensity for user u on day d with tenure t = d - signup_day (t >= 0 only):
+
+        lambda_u(t) = base(segment) * heterogeneity_u
+                      * (1 + ONBOARDING_BURST * exp(-t / ONBOARDING_TAU_DAYS))   # first-week burst
+                      * exp(-t / TENURE_DECAY_TAU_DAYS)                          # slow long-run decay
+                      * [t < churn_day_u]                                        # hard churn
+                      * weekday_factor(d)                                        # weekly seasonality
+
+    The matrix is scaled so the expected total equals `n_conv`. This gives
+    cohort retention curves with a realistic shape (high week 0, drop, slow
+    decline) instead of a flat plateau, and weekday seasonality falls out of
+    the model rather than being imposed by deleting weekend rows.
+    """
+    n_users = len(users)
+    n_days = (end - start).days
+    day_dates = pd.DatetimeIndex([start + timedelta(days=i) for i in range(n_days)])
+
+    signup_day = ((users["created_at"] - start).dt.total_seconds() // 86400).to_numpy()  # negative = pre-window
+    tenure = np.arange(n_days)[None, :] - signup_day[:, None]                                # users x days
+    observed = tenure >= 0
+
+    base = users["segment"].map({"retail": 1.0, "premium": 1.6, "business": 2.4}).to_numpy()
+    heterogeneity = rng.gamma(shape=2.0, scale=0.5, size=n_users)                            # mean 1, some heavy users
+    churn_day = rng.exponential(scale=CHURN_MEAN_DAYS, size=n_users)
+    alive = tenure < churn_day[:, None]
+    weekday_factor = np.where(day_dates.dayofweek >= 5, WEEKEND_FACTOR, 1.0)[None, :]
+
+    t = np.clip(tenure, 0, None)
+    lam = (
+        (base * heterogeneity)[:, None]
+        * (1 + ONBOARDING_BURST * np.exp(-t / ONBOARDING_TAU_DAYS))
+        * np.exp(-t / TENURE_DECAY_TAU_DAYS)
+        * alive
+        * observed
+        * weekday_factor
+    )
+    lam *= n_conv / lam.sum()
+    counts = rng.poisson(lam)
+
+    user_idx, day_idx = np.nonzero(counts)
+    reps = counts[user_idx, day_idx]
+    user_idx = np.repeat(user_idx, reps)
+    day_idx = np.repeat(day_idx, reps)
+    n = len(user_idx)
+
+    started = day_dates[day_idx].to_numpy() + pd.to_timedelta(rng.integers(0, 86400, size=n), unit="s")
+    # On the signup day itself a conversation cannot precede the signup timestamp
+    user_created = users["created_at"].to_numpy()[user_idx]
     started = np.maximum(started, user_created + np.timedelta64(60, "s"))
-    # Weekly seasonality: fewer conversations on weekends -> drop 35% of weekend rows
-    dow = pd.DatetimeIndex(started).dayofweek
-    keep = ~((dow >= 5) & (rng.random(n_conv) < 0.35))
-    started, user_idx = started[keep], user_idx[keep]
-    n = len(started)
 
     duration = rng.lognormal(mean=5.3, sigma=0.7, size=n).astype(int)  # median ~200s
     intents = pick(rng, {k: v[0] for k, v in INTENTS.items()}, n)
