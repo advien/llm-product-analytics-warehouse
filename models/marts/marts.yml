@@ -276,3 +276,45 @@ models:
           - accepted_values:
               arguments:
                 values: [high, low]
+
+  - name: fct_weekly_cohort_retention
+    description: >
+      Weekly cohort retention of assistant usage. Grain: (signup_week,
+      weeks_since_signup), user-relative weeks. Only cohorts whose whole signup
+      week lies inside the observed window. Cells whose week has not fully
+      elapsed for every cohort member are kept but flagged
+      is_fully_observable = false (biased low). See model header and
+      docs/metric_definitions.md.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [signup_week, weeks_since_signup]
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "n_retained_users <= cohort_size"
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "n_conversations >= n_retained_users"
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "n_escalated_conversations <= n_conversations"
+    columns:
+      - name: cohort_size
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 1
+      - name: weeks_since_signup
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+      - name: retention_rate
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 1
+      - name: is_fully_observable
+        data_tests: [not_null]

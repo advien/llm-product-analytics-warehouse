@@ -133,6 +133,11 @@ reliability = query(f"""
     order by request_date
 """)
 intents = query("select * from marts.mart_intent_quality order by n_conversations desc")
+cohorts = query("""
+    select signup_week, weeks_since_signup, cohort_size, retention_rate, is_fully_observable
+    from marts.fct_weekly_cohort_retention
+    order by signup_week, weeks_since_signup
+""")
 anomalies = query(f"""
     select metric_date, metric_name, metric_kind, metric_value, baseline_value, robust_z, direction,
            is_actionable_anomaly
@@ -179,6 +184,39 @@ with tab_health:
                          "Satisfaction score"), use_container_width=True)
     c4.plotly_chart(line(daily, "metric_date", {"avg_requests_per_conversation": "Requests / conversation"},
                          "LLM requests per conversation"), use_container_width=True)
+
+    st.subheader("Weekly cohort retention (assistant usage)")
+    st.caption(
+        "Share of each signup-week cohort with at least one conversation in week N after signup "
+        "(`fct_weekly_cohort_retention`). Cells whose week has not fully elapsed for the whole cohort are hidden."
+    )
+    obs = cohorts[cohorts.is_fully_observable]
+    mat = obs.pivot(index="signup_week", columns="weeks_since_signup", values="retention_rate")
+    labels = [f"{d:%b %d}  (n={int(n)})" for d, n in
+              obs.groupby("signup_week").cohort_size.first().items()]
+    c5, c6 = st.columns([3, 2])
+    fig = go.Figure(go.Heatmap(
+        z=mat.values, x=[f"W{c}" for c in mat.columns], y=labels,
+        colorscale=[[0, SEQ_BLUE[0]], [1, SEQ_BLUE[6]]], zmin=0, zmax=1,
+        text=[["" if pd.isna(v) else f"{v:.0%}" for v in row] for row in mat.values],
+        texttemplate="%{text}", textfont=dict(size=11),
+        hovertemplate="cohort %{y}<br>%{x}: %{z:.1%}<extra></extra>",
+        xgap=2, ygap=2, showscale=False,
+    ))
+    base_layout(fig, height=max(320, 26 * len(labels) + 60), title="Retention by cohort", hovermode="closest")
+    fig.update_yaxes(autorange="reversed", showgrid=False)
+    fig.update_xaxes(showgrid=False, title_text="weeks since signup")
+    c5.plotly_chart(fig, use_container_width=True)
+
+    curve = obs.groupby("weeks_since_signup").agg(r=("retention_rate", "mean"), n=("signup_week", "nunique")).reset_index()
+    fig = go.Figure(go.Scatter(x=curve.weeks_since_signup, y=curve.r, mode="lines+markers",
+                               line=dict(width=2, color=SERIES[0]), marker=dict(size=8),
+                               customdata=curve.n,
+                               hovertemplate="week %{x}: %{y:.1%} (avg of %{customdata} cohorts)<extra></extra>"))
+    base_layout(fig, height=320, title="Average retention curve", hovermode="x", showlegend=False)
+    fig.update_yaxes(tickformat=".0%", range=[0, 1])
+    fig.update_xaxes(title_text="weeks since signup", dtick=1)
+    c6.plotly_chart(fig, use_container_width=True)
 
     st.subheader("By intent")
     st.dataframe(
