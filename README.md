@@ -1,5 +1,7 @@
 # LLM Product Analytics Warehouse
 
+[![dbt build](https://github.com/advien/llm-product-analytics-warehouse/actions/workflows/dbt-build.yml/badge.svg)](https://github.com/advien/llm-product-analytics-warehouse/actions/workflows/dbt-build.yml)
+
 A production-style analytics warehouse for an LLM assistant product: raw
 conversation, LLM-request, cost, latency, intent-quality and escalation events
 modelled with **dbt + DuckDB** into tested marts and a dashboard.
@@ -144,7 +146,7 @@ the data-quality notes.
 Requirements: Python 3.11+, ~200 MB disk. No database server needed.
 
 ```bash
-git clone <this repo> && cd llm-product-analytics-warehouse
+git clone https://github.com/advien/llm-product-analytics-warehouse.git && cd llm-product-analytics-warehouse
 python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 cp profiles.example.yml profiles.yml
@@ -229,7 +231,6 @@ is the write-up query.
   current detector works on product-level daily metrics).
 - Incremental `stg_llm_requests` / `fct_llm_requests` with a late-arrival
   look-back window.
-- GitHub Actions running `dbt build` on every push.
 - A second target (BigQuery / Snowflake) to prove SQL portability.
 
 ## Repository layout

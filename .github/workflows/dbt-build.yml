@@ -1,0 +1,50 @@
+name: dbt build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Generate synthetic raw data
+        run: python scripts/generate_synthetic_data.py
+
+      - name: Load raw tables into DuckDB
+        run: python scripts/load_duckdb.py
+
+      - name: Create dbt profile
+        run: cp profiles.example.yml profiles.yml
+
+      - name: dbt deps
+        run: dbt deps --profiles-dir .
+
+      - name: dbt build (seeds, models, tests)
+        # Six warnings are expected: 4 source-level tests documenting raw
+        # defects + 2 visibility lists. Errors fail the job; warnings do not.
+        run: dbt build --profiles-dir . --no-use-colors
+
+      - name: Upload run results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dbt-target
+          path: |
+            target/run_results.json
+            target/manifest.json
+          retention-days: 7
