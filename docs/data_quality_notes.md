@@ -99,7 +99,7 @@ Current build: **168 pass / 6 warn / 0 error** (4 raw-level warnings + 2 visibil
   does not trip the check on every run.
 
 ### 8. Logged cost computed from a lagging price sheet
-- **Raw:** 367 requests (≈1% of three models) whose `cost_usd` was computed
+- **Raw:** 389 requests (≈1% of three models) whose `cost_usd` was computed
   by the orchestration service with an out-of-date embedded price sheet
   (+20–50% vs the finance price list).
 - **Handling:** `int_model_costs` recomputes `calculated_cost_usd` from tokens
@@ -107,7 +107,7 @@ Current build: **168 pass / 6 warn / 0 error** (4 raw-level warnings + 2 visibil
   `is_cost_reconciled` using a tolerance of max(0.5 % relative, $0.00001
   absolute). **All marts use the recomputed cost.**
 - **Proof / visibility:**
-  - `warn_unreconciled_request_costs` lists the 367 rows (warn).
+  - `warn_unreconciled_request_costs` lists the 389 rows (warn).
   - `assert_cost_mismatch_rate_within_slo` fails if any day exceeds 2 %
     mismatches (passes; the observed daily rate is ≈0.4 %).
   - `assert_daily_cost_reconciles_between_marts` ensures the KPI mart and the

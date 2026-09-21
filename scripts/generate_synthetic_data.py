@@ -63,6 +63,10 @@ MODELS = [
 # out of date relative to the finance price list (ratio old/new).
 LEGACY_PRICE_MULTIPLIER = {"gpt-4.1": 1.25, "claude-sonnet-4-5": 1.20, "gemini-2.5-flash": 1.50}
 
+# Probability that one failed LLM call (as seen by the user) tips the
+# conversation into a human hand-off
+P_ESCALATE_PER_FAILURE = 0.20
+
 # Which intents are "hard" and get routed to strong models more often
 HARD_INTENTS = {"transaction_dispute", "account_verification", "loan_inquiry", "payment_failed"}
 
@@ -320,6 +324,38 @@ def gen_intent_predictions(rng, conv: pd.DataFrame) -> pd.DataFrame:
     })
 
 
+def apply_failure_effects(rng, conv: pd.DataFrame, req: pd.DataFrame) -> pd.DataFrame:
+    """Let LLM failures feed back into the conversation outcome.
+
+    A failed call (error / timeout / rate-limit) the user actually saw makes the
+    conversation more likely to end in a hand-off, and that hand-off is
+    attributed to `llm_failure`. This is what makes a provider incident show up
+    downstream as an escalation spike, not only as an error-rate spike.
+    """
+    failed = (req[req["status"] != "success"]
+              .groupby("conversation_id").size().rename("n_failed"))
+    n_failed = conv["conversation_id"].map(failed).fillna(0).to_numpy()
+
+    # Each failed call adds ~P_ESCALATE_PER_FAILURE of escalation probability
+    p_extra = 1 - (1 - P_ESCALATE_PER_FAILURE) ** n_failed
+    newly_escalated = (~conv["escalated"].to_numpy()) & (rng.random(len(conv)) < p_extra)
+    # Already-escalated conversations that also saw failures: most of those
+    # hand-offs are really about the failure
+    reattributed = conv["escalated"].to_numpy() & (n_failed > 0) & (rng.random(len(conv)) < 0.4)
+
+    conv = conv.copy()
+    conv.loc[newly_escalated, "escalated"] = True
+    conv.loc[newly_escalated, "resolved_without_escalation"] = False
+    conv["_escalation_reason_override"] = np.where(newly_escalated | reattributed, "llm_failure", None)
+
+    # Users who hit a failure rate the conversation lower (when they rate at all)
+    hit = n_failed > 0
+    conv.loc[hit, "satisfaction_score"] = np.clip(
+        conv.loc[hit, "satisfaction_score"] - rng.integers(0, 2, size=int(hit.sum())), 1, 5
+    )
+    return conv
+
+
 def gen_escalations(rng, conv: pd.DataFrame) -> pd.DataFrame:
     esc = conv[conv["escalated"]].reset_index(drop=True)
     n = len(esc)
@@ -327,6 +363,8 @@ def gen_escalations(rng, conv: pd.DataFrame) -> pd.DataFrame:
         pick(rng, ESCALATION_REASONS_BY_INTENT.get(i, ESCALATION_REASONS), 1)[0]
         for i in esc["initial_intent"]
     ])
+    override = esc["_escalation_reason_override"].to_numpy()
+    reasons = np.where(pd.notna(override), override, reasons)
     team_by_intent = {
         "transaction_dispute": "disputes", "account_verification": "kyc_compliance",
     }
@@ -438,8 +476,10 @@ def main():
     conv = gen_conversations(rng, users, args.conversations, start, end)
     prices = gen_prices(start, end)
     req = gen_requests(rng, conv, prices, args.requests)
+    conv = apply_failure_effects(rng, conv, req)
     preds = gen_intent_predictions(rng, conv)
     esc = gen_escalations(rng, conv)
+    conv = conv.drop(columns=["_escalation_reason_override"])
     conv, req, manifest = corrupt(rng, conv, req, prices)
 
     # Shuffle request order so raw data isn't suspiciously sorted

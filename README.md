@@ -63,7 +63,7 @@ Raw sources (≈ 90 days, seed 42):
 | `raw_conversations` | 34,166 | channel, initial intent, resolution flags, 1–5 satisfaction (35 % unrated) |
 | `raw_llm_requests` | 98,537 | 5 models across OpenAI / Anthropic / Google, tokens, latency, logged cost, status + error type |
 | `raw_intent_predictions` | 34,166 | predicted intent, confidence, human label on a 30 % reviewed subset |
-| `raw_escalations` | 6,617 | reason, handling team, time to hand-off |
+| `raw_escalations` | 7,353 | reason, handling team, time to hand-off |
 | `raw_daily_model_prices` | 455 | daily price per model, one mid-window price cut |
 
 Injected defects (each tagged in `audit.messy_manifest` so the pipeline can be
@@ -159,8 +159,13 @@ cost, Reliability, Quality, Data quality.
 | ![Quality](docs/img/dashboard_quality.png) | ![Data quality](docs/img/dashboard_data_quality.png) |
 
 Things visible in the data: the 14 July OpenAI incident (error rate 4.6 % →
-17 %, p95 latency 6 s → 35 s; OpenAI at 29 % while the other two providers stay flat), the mid-window `gpt-4.1` price cut, and the
-three models whose logged cost drifts 20–50 % above the price list.
+17 % with OpenAI at 29 % while the other two providers stay flat; p95 latency
+6 s → 35 s; escalations attributed to `llm_failure` 2.6× the baseline that day —
+the generator lets failed calls feed back into hand-offs and satisfaction, so
+the incident has a product cost, not just an SRE one), the mid-window `gpt-4.1`
+price cut, and the three models whose logged cost drifts 20–50 % above the
+price list. [analyses/incident_2026_07_14_provider_outage.sql](analyses/incident_2026_07_14_provider_outage.sql)
+is the write-up query.
 
 ## What this demonstrates
 
