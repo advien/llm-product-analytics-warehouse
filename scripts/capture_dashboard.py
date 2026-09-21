@@ -36,6 +36,12 @@ def main():
             slug = name.lower().replace(" ", "_")
             page.screenshot(path=str(OUT / f"dashboard_{slug}.png"), full_page=True)
             print("saved", OUT / f"dashboard_{slug}.png")
+            if name == "Reliability":
+                # the anomaly section sits below the fold; scroll it into view
+                page.get_by_role("heading", name="Anomaly flags").scroll_into_view_if_needed()
+                page.wait_for_timeout(1500)
+                page.screenshot(path=str(OUT / "dashboard_anomalies.png"))
+                print("saved", OUT / "dashboard_anomalies.png")
         browser.close()
 
 

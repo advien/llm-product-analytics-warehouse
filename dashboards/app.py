@@ -99,6 +99,10 @@ def fmt_pct(v):
     return "-" if pd.isna(v) else f"{v:.1%}"
 
 
+def fmt_num(v):
+    return "-" if pd.isna(v) else (f"{v:,.0f}" if abs(v) >= 100 else f"{v:.4f}")
+
+
 # ----------------------------------------------------------------------------- #
 # Filters
 # ----------------------------------------------------------------------------- #
@@ -129,6 +133,13 @@ reliability = query(f"""
     order by request_date
 """)
 intents = query("select * from marts.mart_intent_quality order by n_conversations desc")
+anomalies = query(f"""
+    select metric_date, metric_name, metric_kind, metric_value, baseline_value, robust_z, direction,
+           is_actionable_anomaly
+    from marts.mart_daily_anomalies
+    where is_anomaly and metric_date {date_clause}
+    order by metric_date, abs(robust_z) desc
+""")
 conv = query(f"""
     select initial_intent, escalation_reason, intent_confidence_bucket, is_escalated,
            intent_is_human_reviewed, intent_is_correct, count(*) as n
@@ -220,6 +231,26 @@ with tab_rel:
                 .groupby(["request_date", "status"], as_index=False).n.sum())
     c4.plotly_chart(stacked_bars(failures, "request_date", "status", "n", STATUS_ORDER, STATUS_COLOR,
                                  "Failed requests by status"), use_container_width=True)
+
+    st.subheader("Anomaly flags")
+    st.caption(
+        "Robust z-score vs a trailing median/MAD baseline (`mart_daily_anomalies`). "
+        "Only days with |z| > 3.5 are listed; *actionable* = moved in the direction that hurts."
+    )
+    if anomalies.empty:
+        st.info("No anomalies in the selected range.")
+    else:
+        a_days = anomalies.groupby("metric_date").metric_name.nunique()
+        fig = go.Figure(go.Bar(x=a_days.index, y=a_days.values, marker_color=SERIES[7],
+                               marker_line=dict(width=1, color="white")))
+        base_layout(fig, height=200, title="Metrics flagged per day", hovermode="x", showlegend=False)
+        fig.update_xaxes(range=[pd.Timestamp(start) - pd.Timedelta(days=1), pd.Timestamp(end) + pd.Timedelta(days=1)])
+        st.plotly_chart(fig, use_container_width=True)
+        st.dataframe(
+            anomalies.assign(metric_date=anomalies.metric_date.dt.date)
+            .style.format({"metric_value": fmt_num, "baseline_value": fmt_num, "robust_z": "{:+.1f}"}),
+            use_container_width=True, hide_index=True,
+        )
 
     st.subheader("Model scorecard")
     score = (reliability.groupby(["model_provider", "model_name", "model_tier"], as_index=False)

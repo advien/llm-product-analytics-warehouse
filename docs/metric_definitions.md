@@ -31,6 +31,7 @@ Conventions:
 | Requests per conversation | `n_requests_in_conversations / n_conversations` (orphan requests excluded from numerator) | `fct_daily_product_metrics.avg_requests_per_conversation` |
 | Satisfaction by intent | Mean rating grouped by `initial_intent` | `mart_intent_quality.avg_satisfaction_score` |
 | Escalation reason distribution | Count of escalated conversations by `escalation_reason`; modal reason per intent | `fct_conversations.escalation_reason`, `mart_intent_quality.top_escalation_reason` |
+| LLM-failure escalations | Escalations whose reason is `llm_failure`, as a count and as a share of the day's escalations — the product-side footprint of a reliability incident | `fct_daily_product_metrics.n_llm_failure_escalations`, `.llm_failure_escalation_share` |
 
 ## LLM cost
 
@@ -74,6 +75,36 @@ to them.
 | Confusion matrix | (actual, predicted) pairs with counts and row-normalised share, reviewed subset | `int_intent_confusion` |
 | Escalation by intent | escalation rate and modal reason per intent | `mart_intent_quality` |
 
+## Anomaly flags
+
+`mart_daily_anomalies` scores 11 of the daily metrics above against their own
+recent history. Grain: (metric_date, metric_name).
+
+| Column | Definition |
+|---|---|
+| `baseline_value` | median of the metric over the baseline window, **current day excluded** |
+| `baseline_spread` | `max(1.4826 × MAD, floor)` — MAD scaled to be σ-comparable, with a per-kind floor |
+| `robust_z` | `(metric_value − baseline_value) / baseline_spread`; NULL until enough history |
+| `is_anomaly` | `abs(robust_z) > 3.5` (Iglewicz–Hoaglin modified z-score threshold) |
+| `direction` / `actionable_direction` | which way the metric moved / which way is bad for this metric |
+| `is_actionable_anomaly` | anomaly **and** moved in the bad direction |
+
+Baseline window and spread floor depend on `metric_kind`:
+
+| kind | metrics | window | spread floor | why |
+|---|---|---|---|---|
+| `rate` | error_rate, timeout_rate, escalation_rate, llm_failure_escalation_share, cost_per_conversation_usd, auto_resolution_rate, avg_satisfaction_score, intent_accuracy | previous 14 days | 2 % of baseline | rates are weekday-flat; MAD alone can be ~0 on a stable rate |
+| `latency` | p95_latency_ms | previous 14 days | 5 % of baseline | percentiles jitter by a few % day to day |
+| `count` | n_llm_failure_escalations | previous 14 days | √baseline | Poisson noise on small counts |
+| `amount` | total_cost_usd | same weekday, previous 8 weeks | 5 % of baseline | weekend spend is ~35 % lower; a trailing window flags every Saturday |
+
+All thresholds are dbt vars (`anomaly_z_threshold`, `anomaly_baseline_days`,
+`anomaly_baseline_weeks`, `anomaly_min_history_days`, `anomaly_min_history_weeks`)
+and were tuned on the synthetic data; on a real product they would be set from
+a labelled incident history. On the default dataset the detector raises 13
+flags over 990 metric-days (1.3 %), five of them on the planted 14 July
+incident.
+
 ## Dimensions
 
 | Table | Grain | Notable attributes |
@@ -90,3 +121,6 @@ to them.
 - **Weekly cohort retention** — `dim_users.signup_week` and
   `fct_conversations.user_signup_week` are in place; the cohort matrix is a
   natural follow-up (see README → Future improvements).
+- **Per-provider anomaly detection** — flags are computed on product-level
+  daily metrics. A provider-level detector on `mart_model_reliability_daily`
+  would localise an incident faster; same SQL, different grain.

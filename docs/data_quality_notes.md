@@ -24,7 +24,7 @@ ingests are collapsed, and even then `had_duplicate_ingest` marks the survivor.
 | `tests/warn_*.sql` | warn | Visibility lists for defects that are repaired but worth tracking upstream. |
 | `tests/assert_*.sql` | error | Cross-mart invariants and SLO-style thresholds. |
 
-Current build: **168 pass / 6 warn / 0 error** (4 raw-level warnings + 2 visibility warnings).
+Current build: **177 pass / 6 warn / 0 error** (4 raw-level warnings + 2 visibility warnings).
 
 ## Defect catalogue
 
@@ -138,6 +138,10 @@ Worth recording because they are the kind of bug this layering exists for:
 - No test asserts a metric's absolute level (e.g. "escalation rate < 25 %").
   Those are product SLOs, not data-quality invariants, and belong in
   monitoring/alerting on top of the marts.
-- No anomaly detection on daily cost or error-rate spikes — listed as a stretch
-  goal. The 14 July provider incident is visible in the reliability mart and
-  would be the test fixture for it.
+- Anomaly flags (`mart_daily_anomalies`) are tested for *mechanics* (grain,
+  a flag requires a z-score, actionable ⊂ anomaly) and by one regression
+  fixture: `assert_anomaly_detector_flags_provider_incident` requires the
+  planted 14 July incident to be flagged on error rate, timeout rate and p95
+  latency, and error rate to fire on at most two other days. That test
+  encodes a property of the synthetic dataset, not a business rule — it is
+  a test of the detector, and says so in its header.

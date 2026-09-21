@@ -36,7 +36,7 @@ raw_daily_model_prices ► stg_daily_model_prices ┘                 │       
 seeds/model_aliases ────┘                                         │       │
                                             int_conversation_request_rollup
                                                                   │
-                                            int_daily_product_metrics ─► fct_daily_product_metrics
+                                            int_daily_product_metrics ─► fct_daily_product_metrics ─► mart_daily_anomalies
                                             int_intent_confusion
 seeds/model_catalog ─────────────────────────────────────────────────────► dim_models
 seeds/intent_catalog ────────────────────────────────────────────────────► dim_intents
@@ -75,6 +75,10 @@ seeds/intent_catalog ───────────────────�
 - `fct_*` — one row per business event (conversation, request, day, day×model).
 - `dim_*` — catalogues enriched with observed usage.
 - `mart_*` — pre-shaped for one dashboard view; may denormalise freely.
+  `mart_daily_anomalies` is the one mart that reads another mart
+  (`fct_daily_product_metrics`) rather than intermediates: it is a
+  monitoring layer on top of the published KPIs, and must see exactly what
+  the dashboard sees.
 - Consumers (dashboard, ad-hoc SQL) read *only* this schema.
 
 ## Key design decisions
@@ -88,6 +92,7 @@ seeds/intent_catalog ───────────────────�
 | Accuracy on the human-reviewed subset only | Use `predicted == initial_intent` for all rows | `initial_intent` in the conversation feed *is* the model's routing decision — using it as truth would be circular. Only human labels count, and `n_reviewed` is always shown next to accuracy. |
 | Daily spine spans union of conversation and request dates; trailing day flagged `is_partial_day` | Spine from conversations only | Requests spill past midnight on the last day; a spine built from one side silently drops them (caught by a reconciliation test during development). |
 | Views for staging/intermediate, tables for marts | Everything as tables | Rebuild is ~2 s; views keep the warehouse file small and avoid stale intermediates. Marts are tables because the dashboard queries them repeatedly. |
+| Anomaly baseline = median/MAD with per-kind floors, in SQL | Mean/stddev; a Python job with Prophet/STL | Median/MAD is not inflated by the incident it is meant to catch; per-kind floors handle Poisson counts and weekly seasonality without a model. Stays inside dbt, so it is tested and versioned like every other mart. |
 | Seeds for aliases and catalogues | Hard-code in SQL `case` expressions | Seeds are diff-able, testable (`unique`, `accepted_values`) and editable by non-engineers. |
 
 ## Running order
