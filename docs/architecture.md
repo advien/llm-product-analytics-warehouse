@@ -27,6 +27,7 @@ containers, no cloud account.
 
 ```
 raw_users ─────────────► stg_users ──────────────────────────────┬─► dim_users
+                              └── + stg_conversations ───────────────────────► fct_weekly_cohort_retention
 raw_conversations ─────► stg_conversations ─┬─► int_conversation_quality ─┐
 raw_intent_predictions ► stg_intent_predictions ┘        │                │
 raw_escalations ───────► stg_escalations ────────────────┘                ├─► fct_conversations ─► mart_intent_quality
@@ -93,6 +94,7 @@ seeds/intent_catalog ───────────────────�
 | Daily spine spans union of conversation and request dates; trailing day flagged `is_partial_day` | Spine from conversations only | Requests spill past midnight on the last day; a spine built from one side silently drops them (caught by a reconciliation test during development). |
 | Views for staging/intermediate, tables for marts | Everything as tables | Rebuild is ~2 s; views keep the warehouse file small and avoid stale intermediates. Marts are tables because the dashboard queries them repeatedly. |
 | Anomaly baseline = median/MAD with per-kind floors, in SQL | Mean/stddev; a Python job with Prophet/STL | Median/MAD is not inflated by the incident it is meant to catch; per-kind floors handle Poisson counts and weekly seasonality without a model. Stays inside dbt, so it is tested and versioned like every other mart. |
+| Cohorts on user-relative weeks, only fully-in-window signup weeks, explicit observability flag | Calendar-week alignment; include pre-window users | User-relative weeks make week 0 mean the same thing for everyone; pre-window users have no observable week 0 and would drag it down; the flag keeps partial cells honest instead of dropping them. |
 | Seeds for aliases and catalogues | Hard-code in SQL `case` expressions | Seeds are diff-able, testable (`unique`, `accepted_values`) and editable by non-engineers. |
 
 ## Running order

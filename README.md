@@ -5,7 +5,7 @@ conversation, LLM-request, cost, latency, intent-quality and escalation events
 modelled with **dbt + DuckDB** into tested marts and a dashboard.
 
 The point is not the dashboard. The point is that every number on it can be
-traced to one documented SQL expression, survives 159 dbt tests, and is
+traced to one documented SQL expression, survives 170 dbt tests, and is
 reconciled across marts — on raw data that is deliberately broken in the ways
 real product event streams are broken.
 
@@ -48,22 +48,25 @@ generate_synthetic_data.py ─► data/raw/*.csv ─► load_duckdb.py ─► ra
 | **sources** | 6 raw tables | Loaded verbatim (all VARCHAR). Freshness declared. Tests at `warn` severity document known upstream defects. |
 | **staging** | 6 | Cast, rename, dedupe, **flag** every defect (never drop). Tests at `error` severity prove the fix. |
 | **intermediate** | 5 | Cost recomputation + reconciliation, conversation rollups, quality signals, additive daily components, confusion matrix. |
-| **marts** | 10 | `fct_conversations`, `fct_llm_requests`, `fct_daily_product_metrics`, `fct_daily_model_costs`, `dim_users`, `dim_models`, `dim_intents`, `mart_intent_quality`, `mart_model_reliability_daily`, `mart_daily_anomalies`. |
-| **tests** | 159 | 151 generic (unique / not-null / relationships / accepted values / ranges / expressions) + 8 singular tests (cross-mart reconciliation, SLO thresholds, detector regression fixture). |
+| **marts** | 11 | `fct_conversations`, `fct_llm_requests`, `fct_daily_product_metrics`, `fct_daily_model_costs`, `fct_weekly_cohort_retention`, `dim_users`, `dim_models`, `dim_intents`, `mart_intent_quality`, `mart_model_reliability_daily`, `mart_daily_anomalies`. |
+| **tests** | 170 | 160 generic (unique / not-null / relationships / accepted values / ranges / expressions) + 10 singular tests (cross-mart reconciliation, SLO thresholds, independent recomputations, detector regression fixture). |
 
 Full lineage, layer contracts and design decisions: [docs/architecture.md](docs/architecture.md).
 
 ## Data model
 
-Raw sources (≈ 90 days, seed 42):
+Raw sources (≈ 90 days, seed 42). User activity is a per-user Poisson process
+with an onboarding burst, slow tenure decay, hard churn and a weekday factor,
+so cohort curves and weekly seasonality come out of the model rather than
+being painted on:
 
 | Table | Rows | Notes |
 |---|---|---|
 | `raw_users` | 6,000 | segment, country, signup channel |
-| `raw_conversations` | 34,166 | channel, initial intent, resolution flags, 1–5 satisfaction (35 % unrated) |
-| `raw_llm_requests` | 98,537 | 5 models across OpenAI / Anthropic / Google, tokens, latency, logged cost, status + error type |
-| `raw_intent_predictions` | 34,166 | predicted intent, confidence, human label on a 30 % reviewed subset |
-| `raw_escalations` | 7,353 | reason, handling team, time to hand-off |
+| `raw_conversations` | 37,803 | channel, initial intent, resolution flags, 1–5 satisfaction (35 % unrated) |
+| `raw_llm_requests` | 99,100 | 5 models across OpenAI / Anthropic / Google, tokens, latency, logged cost, status + error type |
+| `raw_intent_predictions` | 37,803 | predicted intent, confidence, human label on a 30 % reviewed subset |
+| `raw_escalations` | 7,995 | reason, handling team, time to hand-off |
 | `raw_daily_model_prices` | 455 | daily price per model, one mid-window price cut |
 
 Injected defects (each tagged in `audit.messy_manifest` so the pipeline can be
@@ -89,9 +92,15 @@ Implemented and documented in [docs/metric_definitions.md](docs/metric_definitio
 - **Quality** — intent accuracy and corrected-intent rate (reviewed subset),
   confidence distribution, low-confidence share, confusion matrix, escalation
   by intent and reason.
-- **Anomaly flags** — robust z-score (rolling median / MAD, per-kind floors,
-  same-weekday baseline for spend) on 11 daily metrics, with direction and
-  actionability. 13 flags in 90 days; five of them are the 14 July incident.
+- **Cohort retention** — weekly signup cohorts × user-relative weeks since
+  signup, with an explicit observability flag for cells whose week has not
+  fully elapsed. Retention of *assistant usage*: 90 % → 71 % → 58 % → 51 % →
+  44 % → … → 32 % by week 10.
+- **Anomaly flags** — robust z-score (rolling median / MAD) on 11 daily
+  metrics, with the spread floored at each metric's own sampling noise
+  (binomial s.e. at the day's volume for proportions, √n for counts,
+  same-weekday baseline for spend). 7 flags in 90 days; five of them are the
+  14 July incident.
 
 Two conventions run through all of them: ratios are computed from additive
 components (never averaged across days), and *cost* always means
@@ -103,7 +112,7 @@ reconciliation only.
 The build is green with six **expected** warnings:
 
 ```
-Done. PASS=177 WARN=6 ERROR=0 SKIP=0 TOTAL=183
+Done. PASS=189 WARN=6 ERROR=0 SKIP=0 TOTAL=195
 ```
 
 Four warnings are source-level tests that document defects in `raw.*`; two
@@ -121,6 +130,8 @@ The singular tests are the interesting ones:
 | `assert_cost_mismatch_rate_within_slo` | ≤ 2 % of requests per day have unreconciled cost |
 | `assert_intent_accuracy_consistent_across_marts` | daily and per-intent marts report the same overall accuracy |
 | `assert_anomaly_detector_flags_provider_incident` | the planted incident is flagged on error / timeout / p95, and error rate fires on ≤ 2 other days (a regression fixture for the detector, not a business rule) |
+| `assert_cohort_sizes_match_dim_users` | every cohort's size equals the user count for that signup week in `dim_users` |
+| `assert_retention_week0_covers_all_first_conversations` | week-0 retained users equal an independent recomputation from `dim_users` × `fct_conversations` |
 | `warn_unreconciled_request_costs` | list of requests outside cost tolerance |
 | `warn_conversations_with_conflicting_raw_flags` | list of contradictory raw resolution flags |
 
@@ -141,7 +152,7 @@ cp profiles.example.yml profiles.yml
 python scripts/generate_synthetic_data.py   # ~4 s → data/raw/*.csv
 python scripts/load_duckdb.py               # → data/processed/warehouse.duckdb (raw.*)
 dbt deps --profiles-dir .
-dbt build --profiles-dir .                  # seeds + 21 models + 159 tests, ~10 s
+dbt build --profiles-dir .                  # seeds + 22 models + 170 tests, ~10 s
 
 streamlit run dashboards/app.py
 ```
@@ -162,14 +173,17 @@ cost, Reliability, Quality, Data quality.
 | ![Cost](docs/img/dashboard_llm_cost.png) | ![Reliability](docs/img/dashboard_reliability.png) |
 | ![Quality](docs/img/dashboard_quality.png) | ![Data quality](docs/img/dashboard_data_quality.png) |
 
+![Cohort retention](docs/img/dashboard_cohorts.png)
+
 ![Anomaly flags](docs/img/dashboard_anomalies.png)
 
 Things visible in the data: the 14 July OpenAI incident (error rate 4.6 % →
-17 % with OpenAI at 29 % while the other two providers stay flat; p95 latency
-6 s → 35 s; escalations attributed to `llm_failure` 2.6× the baseline that day —
+19 % with OpenAI at 31 % while the other two providers stay at 2–5 %; p95
+latency 6.5 s → 43 s; escalations attributed to `llm_failure` ~3× the baseline
+that day —
 the generator lets failed calls feed back into hand-offs and satisfaction, so
 the incident has a product cost, not just an SRE one; the anomaly detector
-flags it on five metrics with z-scores of 4–87), the mid-window `gpt-4.1`
+flags it on five metrics with z-scores of 7–111), the mid-window `gpt-4.1`
 price cut, and the three models whose logged cost drifts 20–50 % above the
 price list. [analyses/incident_2026_07_14_provider_outage.sql](analyses/incident_2026_07_14_provider_outage.sql)
 is the write-up query.
@@ -207,8 +221,10 @@ is the write-up query.
 
 ## Future improvements
 
-- Weekly cohort retention (`signup_week` is already on `dim_users` and
-  `fct_conversations`).
+- Trend-aware anomaly baseline for spend (the current level-based baseline
+  lags a fast-growing series; a 10 % floor absorbs it on this data).
+- Retention by segment / signup channel (the cohort mart has the grain; the
+  dimensions are one join away).
 - Per-provider anomaly detection on `mart_model_reliability_daily` (the
   current detector works on product-level daily metrics).
 - Incremental `stg_llm_requests` / `fct_llm_requests` with a late-arrival

@@ -24,22 +24,22 @@ ingests are collapsed, and even then `had_duplicate_ingest` marks the survivor.
 | `tests/warn_*.sql` | warn | Visibility lists for defects that are repaired but worth tracking upstream. |
 | `tests/assert_*.sql` | error | Cross-mart invariants and SLO-style thresholds. |
 
-Current build: **177 pass / 6 warn / 0 error** (4 raw-level warnings + 2 visibility warnings).
+Current build: **189 pass / 6 warn / 0 error** (4 raw-level warnings + 2 visibility warnings).
 
 ## Defect catalogue
 
 ### 1. Duplicate `request_id` (at-least-once delivery)
-- **Raw:** 294 request rows are exact replays with a later `_ingested_at`.
-- **Detected by:** `source_unique_raw_raw_llm_requests_request_id` (warn 294).
+- **Raw:** 296 request rows are exact replays with a later `_ingested_at`.
+- **Detected by:** `source_unique_raw_raw_llm_requests_request_id` (warn 296).
 - **Handling:** `stg_llm_requests` keeps the earliest-ingested copy
   (`row_number() over (partition by request_id order by ingested_at)`), sets
   `had_duplicate_ingest = true` on the survivor.
 - **Proof:** `unique_stg_llm_requests_request_id` passes; `fct_llm_requests` has
-  98,243 rows = 98,537 raw − 294.
+  98,804 rows = 99,100 raw − 296.
 
 ### 2. Missing `conversation_id` (orphan requests)
-- **Raw:** 196 requests with a null conversation reference.
-- **Detected by:** `source_not_null_raw_raw_llm_requests_conversation_id` (warn 196).
+- **Raw:** 197 requests with a null conversation reference.
+- **Detected by:** `source_not_null_raw_raw_llm_requests_conversation_id` (warn 197).
 - **Handling:** kept, `is_orphan = true`. Included in total cost and error
   rate (the provider billed them, the failure happened), **excluded** from
   cost-per-conversation and requests-per-conversation.
@@ -56,8 +56,8 @@ Current build: **177 pass / 6 warn / 0 error** (4 raw-level warnings + 2 visibil
   `fct_llm_requests.latency_ms` pass.
 
 ### 4. `total_tokens ≠ prompt + completion` (double-counted system prompt)
-- **Raw:** 491 rows where the reported total is inflated.
-- **Detected by:** source expression test (warn 491).
+- **Raw:** 494 rows where the reported total is inflated.
+- **Detected by:** source expression test (warn 494).
 - **Handling:** `total_tokens` is **always** recomputed as
   `prompt_tokens + completion_tokens`; the reported value is kept as
   `raw_total_tokens`, `has_token_sum_mismatch = true`.
@@ -65,7 +65,7 @@ Current build: **177 pass / 6 warn / 0 error** (4 raw-level warnings + 2 visibil
   on staging passes.
 
 ### 5. Model name not in the price list (preview aliases)
-- **Raw:** 196 requests logged with a `-preview` suffix (`gpt-4o-mini-preview`, …).
+- **Raw:** 197 requests logged with a `-preview` suffix (`gpt-4o-mini-preview`, …).
 - **Handling:** the `model_aliases` seed maps aliases → canonical names in
   staging (`has_model_alias = true`, `model_name_raw` kept). A genuinely new,
   unpriced model would surface as a **failure** of the
@@ -76,20 +76,20 @@ Current build: **177 pass / 6 warn / 0 error** (4 raw-level warnings + 2 visibil
   volume per model.
 
 ### 6. Conversations both resolved-without-escalation **and** escalated
-- **Raw:** 136 conversations with contradictory flags.
+- **Raw:** 151 conversations with contradictory flags.
 - **Handling:** `stg_conversations` derives a single `resolution_status`
   (`escalated` > `auto_resolved` > `abandoned`). Escalation wins because it is
   corroborated by an independent hand-off record in `raw_escalations`.
   `has_conflicting_resolution = true` is kept.
 - **Proof:** `expression_is_true: not (is_auto_resolved and is_escalated)` on
   staging and on `fct_conversations`; `warn_conversations_with_conflicting_raw_flags`
-  lists the 136 for the upstream team.
+  lists the 151 for the upstream team.
 - **Cross-check:** `int_conversation_quality.is_escalated_without_record` and
   `has_record_without_escalation_flag` are tested to be always false, so the
   conversation flag and the escalation table never disagree after staging.
 
 ### 7. Late-arriving events
-- **Raw:** 392 requests ingested 2–5 days after `created_at`.
+- **Raw:** 395 requests ingested 2–5 days after `created_at`.
 - **Handling:** `is_late_arriving = true` when ingestion lags the event by
   more than 60 minutes. Metrics are keyed on **event time** (`created_at`), so
   late rows land on the correct day. In an incremental setup this flag is what
@@ -99,7 +99,7 @@ Current build: **177 pass / 6 warn / 0 error** (4 raw-level warnings + 2 visibil
   does not trip the check on every run.
 
 ### 8. Logged cost computed from a lagging price sheet
-- **Raw:** 389 requests (≈1% of three models) whose `cost_usd` was computed
+- **Raw:** 385 requests (≈1% of three models) whose `cost_usd` was computed
   by the orchestration service with an out-of-date embedded price sheet
   (+20–50% vs the finance price list).
 - **Handling:** `int_model_costs` recomputes `calculated_cost_usd` from tokens
@@ -107,7 +107,7 @@ Current build: **177 pass / 6 warn / 0 error** (4 raw-level warnings + 2 visibil
   `is_cost_reconciled` using a tolerance of max(0.5 % relative, $0.00001
   absolute). **All marts use the recomputed cost.**
 - **Proof / visibility:**
-  - `warn_unreconciled_request_costs` lists the 389 rows (warn).
+  - `warn_unreconciled_request_costs` lists the 385 rows (warn).
   - `assert_cost_mismatch_rate_within_slo` fails if any day exceeds 2 %
     mismatches (passes; the observed daily rate is ≈0.4 %).
   - `assert_daily_cost_reconciles_between_marts` ensures the KPI mart and the
@@ -135,6 +135,11 @@ Worth recording because they are the kind of bug this layering exists for:
 
 ## What is *not* tested (and why)
 
+- Cohort retention is tested by two independent recomputations
+  (`assert_cohort_sizes_match_dim_users`,
+  `assert_retention_week0_covers_all_first_conversations`) plus grain and
+  bound checks. Nothing asserts the *shape* of the curve — that is a
+  property of the synthetic activity model, not of the pipeline.
 - No test asserts a metric's absolute level (e.g. "escalation rate < 25 %").
   Those are product SLOs, not data-quality invariants, and belong in
   monitoring/alerting on top of the marts.

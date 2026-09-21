@@ -91,19 +91,41 @@ recent history. Grain: (metric_date, metric_name).
 
 Baseline window and spread floor depend on `metric_kind`:
 
-| kind | metrics | window | spread floor | why |
+| kind | metrics | window | spread floor | basis |
 |---|---|---|---|---|
-| `rate` | error_rate, timeout_rate, escalation_rate, llm_failure_escalation_share, cost_per_conversation_usd, auto_resolution_rate, avg_satisfaction_score, intent_accuracy | previous 14 days | 2 % of baseline | rates are weekday-flat; MAD alone can be ~0 on a stable rate |
-| `latency` | p95_latency_ms | previous 14 days | 5 % of baseline | percentiles jitter by a few % day to day |
-| `count` | n_llm_failure_escalations | previous 14 days | √baseline | Poisson noise on small counts |
-| `amount` | total_cost_usd | same weekday, previous 8 weeks | 5 % of baseline | weekend spend is ~35 % lower; a trailing window flags every Saturday |
+| `proportion` | error_rate, timeout_rate, escalation_rate, llm_failure_escalation_share, auto_resolution_rate, intent_accuracy | previous 14 days | binomial s.e. `√(p(1−p)/n)` at the **day's** denominator (requests, conversations, escalations, reviewed predictions) | statistical: a flag means "beyond sampling noise"; automatically stricter on high-volume days |
+| `count` | n_llm_failure_escalations | previous 14 days | `√baseline` | statistical: Poisson |
+| `amount` | total_cost_usd | same weekday, previous 4 weeks | 10 % of baseline | measured: robust day-to-day spread of daily spend on this data is ~11 %; a longer window lags the volume trend |
+| `score` | avg_satisfaction_score | previous 14 days | 2 % of baseline | heuristic: s.e. of a 1–5 mean over ~300 ratings ≈ 0.06 ≈ 2 % |
+| `ratio` | p95_latency_ms, cost_per_conversation_usd | previous 14 days | 5 % of baseline | heuristic: heavy-tailed ratios jitter a few % daily |
 
+Only the first three floors are derived (from the metric's statistics or a
+measurement on the data); `score` and `ratio` are judgement calls and say so.
 All thresholds are dbt vars (`anomaly_z_threshold`, `anomaly_baseline_days`,
-`anomaly_baseline_weeks`, `anomaly_min_history_days`, `anomaly_min_history_weeks`)
-and were tuned on the synthetic data; on a real product they would be set from
-a labelled incident history. On the default dataset the detector raises 13
-flags over 990 metric-days (1.3 %), five of them on the planted 14 July
-incident.
+`anomaly_baseline_weeks`, `anomaly_min_history_days`, `anomaly_min_history_weeks`).
+On the default dataset the detector raises 7 flags over 990 metric-days
+(0.7 %), five of them on the planted 14 July incident. Known limitation: the
+baseline is level-based, so an `amount` metric under a strong growth trend
+reads systematically high; a trend-aware baseline is the natural next step.
+
+## Cohort retention
+
+`fct_weekly_cohort_retention`. Grain: (signup_week, weeks_since_signup).
+
+| Term | Definition |
+|---|---|
+| cohort | users whose `signup_date` falls in a Monday-start calendar week that lies **entirely inside** the observed window (users who signed up before the window have no observable week 0 and are excluded) |
+| `weeks_since_signup` | `floor((conversation_date − signup_date) / 7)` — **user-relative**; week 0 is each user's first 7 days, not the calendar week of signup |
+| `n_retained_users` | cohort members with ≥ 1 conversation in that week (unbounded: inactive in week 2, active in week 3 still counts in week 3) |
+| `retention_rate` | `n_retained_users / cohort_size` |
+| `conversations_per_cohort_user` | conversations in that week / cohort size — intensity, not just presence |
+| `is_fully_observable` | the week has fully elapsed for **every** member of the cohort (`last signup in cohort + 7·(N+1) − 1 ≤ window end`). Partially observable cells are kept for completeness but are biased low and must not be charted |
+
+What this measures: whether users keep coming back to the **assistant**. The
+warehouse has no login events, so this is not product retention; for a
+support assistant a high number can mean engagement or unresolved problems,
+and should be read next to escalation and satisfaction for the same cohort
+(`n_escalated_conversations` is carried for that purpose).
 
 ## Dimensions
 
@@ -118,9 +140,9 @@ incident.
 - **Cost per token as a KPI in `fct_daily_product_metrics`** for individual
   models — it lives in `fct_daily_model_costs` because it is only meaningful
   per model.
-- **Weekly cohort retention** — `dim_users.signup_week` and
-  `fct_conversations.user_signup_week` are in place; the cohort matrix is a
-  natural follow-up (see README → Future improvements).
+- **Retention by segment or channel** — the cohort mart is at (cohort, week)
+  grain only; splitting by `dim_users.segment` is one extra group-by away and
+  was left out to keep the mart's grain unambiguous.
 - **Per-provider anomaly detection** — flags are computed on product-level
   daily metrics. A provider-level detector on `mart_model_reliability_daily`
   would localise an incident faster; same SQL, different grain.

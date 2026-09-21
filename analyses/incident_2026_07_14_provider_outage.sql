@@ -1,5 +1,5 @@
 -- Ad-hoc investigation: what happened on 2026-07-14?
--- The daily KPI mart shows error rate 4.6% -> 17% and p95 latency 6s -> 35s.
+-- The daily KPI mart shows error rate 4.6% -> 19% and p95 latency 6.5s -> 43s.
 -- This query attributes the spike to a provider and quantifies the blast
 -- radius in conversations, escalations and wasted spend.
 -- Run with: dbt compile --select incident_2026_07_14_provider_outage, then
