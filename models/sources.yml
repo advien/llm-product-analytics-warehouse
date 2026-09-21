@@ -1,0 +1,90 @@
+version: 2
+
+sources:
+  - name: raw
+    description: >
+      Landing zone for product backend extracts. Loaded as-is (all VARCHAR) by
+      `scripts/load_duckdb.py`; nothing is cleaned before staging.
+    schema: raw
+    loaded_at_field: _loaded_at
+    freshness:
+      warn_after: {count: 24, period: hour}
+      error_after: {count: 72, period: hour}
+
+    tables:
+      - name: raw_users
+        description: One row per registered user of the assistant product.
+        columns:
+          - name: user_id
+            data_tests: [unique, not_null]
+
+      - name: raw_conversations
+        description: >
+          One row per assistant conversation session. Contains the known
+          contradiction of conversations flagged both resolved-without-escalation
+          and escalated; resolved in staging.
+        columns:
+          - name: conversation_id
+            data_tests: [unique, not_null]
+          - name: user_id
+            data_tests:
+              - not_null
+              - relationships:
+                  arguments:
+                    to: source('raw', 'raw_users')
+                    field: user_id
+
+      - name: raw_llm_requests
+        description: >
+          One row per call to an LLM provider, emitted by the orchestration
+          service. Known raw-level issues (all EXPECTED to fire as warnings on
+          the synthetic data, see docs/data_quality_notes.md): duplicate
+          request_ids from at-least-once delivery, missing conversation_id,
+          negative latency from client clock skew, total_tokens double-counting
+          the system prompt, preview model aliases, late-arriving events.
+        loaded_at_field: _loaded_at
+        columns:
+          - name: request_id
+            data_tests:
+              - not_null
+              - unique:
+                  config:
+                    severity: warn
+          - name: conversation_id
+            data_tests:
+              - not_null:
+                  config:
+                    severity: warn
+          - name: latency_ms
+            data_tests:
+              - dbt_utils.expression_is_true:
+                  arguments:
+                    expression: "::bigint >= 0"
+                  config:
+                    severity: warn
+          - name: total_tokens
+            data_tests:
+              - dbt_utils.expression_is_true:
+                  arguments:
+                    expression: "::bigint = prompt_tokens::bigint + completion_tokens::bigint"
+                  config:
+                    severity: warn
+
+      - name: raw_intent_predictions
+        description: Output of the intent classifier at conversation start, plus optional human review label.
+        columns:
+          - name: prediction_id
+            data_tests: [unique, not_null]
+
+      - name: raw_escalations
+        description: One row per hand-off from the assistant to a human team.
+        columns:
+          - name: escalation_id
+            data_tests: [unique, not_null]
+
+      - name: raw_daily_model_prices
+        description: Daily snapshot of per-1k-token prices for every model the product is allowed to call.
+        data_tests:
+          - dbt_utils.unique_combination_of_columns:
+              arguments:
+                combination_of_columns: [price_date, model_provider, model_name]

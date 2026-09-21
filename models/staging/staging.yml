@@ -1,0 +1,195 @@
+version: 2
+
+models:
+  - name: stg_users
+    description: Typed and standardised users. One row per user.
+    columns:
+      - name: user_id
+        data_tests: [unique, not_null]
+      - name: created_at
+        data_tests: [not_null]
+      - name: segment
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [retail, premium, business]
+      - name: signup_channel
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [organic, paid_social, referral, partner]
+
+  - name: stg_conversations
+    description: >
+      Typed conversations with a single, non-contradictory `resolution_status`.
+      Conflicting raw flags are preserved via `has_conflicting_resolution`.
+    columns:
+      - name: conversation_id
+        data_tests: [unique, not_null]
+      - name: user_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_users')
+                field: user_id
+      - name: channel
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [mobile_app, web, whatsapp]
+      - name: resolution_status
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [auto_resolved, escalated, abandoned]
+      - name: satisfaction_score
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [1, 2, 3, 4, 5]
+                quote: false
+      - name: duration_seconds
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+    data_tests:
+      # The contradiction present in raw must be impossible after staging
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "not (is_auto_resolved and is_escalated)"
+
+  - name: stg_llm_requests
+    description: >
+      Deduplicated, typed LLM requests with canonical model names and
+      data-quality flags. See model header for the cleaning rules.
+    columns:
+      - name: request_id
+        data_tests: [unique, not_null]
+      - name: conversation_id
+        description: Nullable. Orphan requests (no conversation) are kept for cost accounting.
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('stg_conversations')
+                field: conversation_id
+      - name: model_provider
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [openai, anthropic, google]
+      - name: model_name
+        description: Canonical model name; every value must exist in the price list.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_daily_model_prices')
+                field: model_name
+      - name: status
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [success, error, timeout, rate_limited]
+      - name: prompt_tokens
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+      - name: completion_tokens
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+      - name: latency_ms
+        description: NULL when the raw value was negative (clock skew).
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+      - name: recorded_cost_usd
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+    data_tests:
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "total_tokens = prompt_tokens + completion_tokens"
+      # failed requests must carry an error_type, successes must not
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "(is_failed and error_type is not null) or (is_success and error_type is null)"
+
+  - name: stg_intent_predictions
+    columns:
+      - name: prediction_id
+        data_tests: [unique, not_null]
+      - name: conversation_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_conversations')
+                field: conversation_id
+      - name: confidence
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 1
+
+  - name: stg_escalations
+    columns:
+      - name: escalation_id
+        data_tests: [unique, not_null]
+      - name: conversation_id
+        data_tests:
+          - not_null
+          - unique
+          - relationships:
+              arguments:
+                to: ref('stg_conversations')
+                field: conversation_id
+      - name: escalation_reason
+        data_tests:
+          - accepted_values:
+              arguments:
+                values:
+                  - policy_requires_human
+                  - low_confidence
+                  - user_requested_agent
+                  - unresolved_after_retry
+                  - fraud_suspected
+                  - llm_failure
+      - name: handled_by_team
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [tier1_support, disputes, kyc_compliance, fraud_ops]
+      - name: time_to_handoff_seconds
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+
+  - name: stg_daily_model_prices
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [price_date, model_provider, model_name]
+    columns:
+      - name: input_price_per_1k_tokens
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                inclusive: false
+      - name: output_price_per_1k_tokens
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                inclusive: false

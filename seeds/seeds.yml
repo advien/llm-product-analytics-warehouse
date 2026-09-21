@@ -1,0 +1,18 @@
+version: 2
+
+seeds:
+  - name: model_aliases
+    description: >
+      Maps non-canonical model identifiers that leak into request logs (preview
+      aliases, dated snapshots) to the canonical name used in the price list.
+      Maintained by hand; unknown aliases surface via the
+      `stg_llm_requests.model_name_canonical` relationships test.
+    config:
+      column_types:
+        model_name_alias: varchar
+        model_name_canonical: varchar
+    columns:
+      - name: model_name_alias
+        data_tests: [unique, not_null]
+      - name: model_name_canonical
+        data_tests: [not_null]

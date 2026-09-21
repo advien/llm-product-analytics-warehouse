@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+data/raw/*.csv
+data/processed/*.duckdb
+data/processed/*.duckdb.wal
+target/
+dbt_packages/
+logs/
+.user.yml
+profiles.yml
+.streamlit/secrets.toml

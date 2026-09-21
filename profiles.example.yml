@@ -1,0 +1,8 @@
+# Copy to profiles.yml (git-ignored) or export DBT_PROFILES_DIR to this folder.
+llm_product_analytics:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: data/processed/warehouse.duckdb
+      threads: 4
