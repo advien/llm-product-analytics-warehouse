@@ -1,7 +1,7 @@
 -- Regression fixture for the anomaly detector. The synthetic generator plants
 -- a provider incident on day 42 of the window (2026-07-14 with the default
 -- end date). The detector must flag error_rate, timeout_rate and p95 latency
--- on that day, and must NOT flag error_rate on more than 2 other days in the
+-- on that day, and must NOT flag error_rate on more than 1 other day in the
 -- window (precision guard - a detector that fires everywhere is useless).
 --
 -- NOTE: this test encodes a property of the synthetic dataset, not a
@@ -29,7 +29,7 @@ noisy as (
     where metric_name = 'error_rate'
       and is_anomaly
       and metric_date <> date '{{ incident_date }}'
-    having count(*) > 2
+    having count(*) > 1
 )
 
 select * from missed

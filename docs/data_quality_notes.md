@@ -147,6 +147,6 @@ Worth recording because they are the kind of bug this layering exists for:
   a flag requires a z-score, actionable ⊂ anomaly) and by one regression
   fixture: `assert_anomaly_detector_flags_provider_incident` requires the
   planted 14 July incident to be flagged on error rate, timeout rate and p95
-  latency, and error rate to fire on at most two other days. That test
+  latency, and error rate to fire on at most one other day. That test
   encodes a property of the synthetic dataset, not a business rule — it is
   a test of the detector, and says so in its header.

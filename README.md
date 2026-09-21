@@ -129,7 +129,7 @@ The singular tests are the interesting ones:
 | `assert_every_request_date_has_daily_metrics` | no request date is missing from the daily spine |
 | `assert_cost_mismatch_rate_within_slo` | ≤ 2 % of requests per day have unreconciled cost |
 | `assert_intent_accuracy_consistent_across_marts` | daily and per-intent marts report the same overall accuracy |
-| `assert_anomaly_detector_flags_provider_incident` | the planted incident is flagged on error / timeout / p95, and error rate fires on ≤ 2 other days (a regression fixture for the detector, not a business rule) |
+| `assert_anomaly_detector_flags_provider_incident` | the planted incident is flagged on error / timeout / p95, and error rate fires on ≤ 1 other day (a regression fixture for the detector, not a business rule) |
 | `assert_cohort_sizes_match_dim_users` | every cohort's size equals the user count for that signup week in `dim_users` |
 | `assert_retention_week0_covers_all_first_conversations` | week-0 retained users equal an independent recomputation from `dim_users` × `fct_conversations` |
 | `warn_unreconciled_request_costs` | list of requests outside cost tolerance |
