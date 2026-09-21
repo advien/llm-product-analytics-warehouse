@@ -10,3 +10,4 @@ logs/
 .user.yml
 profiles.yml
 .streamlit/secrets.toml
+WORKLOG.md

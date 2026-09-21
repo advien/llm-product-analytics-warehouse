@@ -239,3 +239,40 @@ models:
               arguments:
                 min_value: 0
                 max_value: 1
+
+  - name: mart_daily_anomalies
+    description: >
+      Robust z-score anomaly flags per (day, metric). Baseline = trailing
+      median, spread = scaled MAD with a per-kind floor; see model header.
+      Thresholds are dbt vars (anomaly_z_threshold, anomaly_baseline_days,
+      anomaly_baseline_weeks, anomaly_min_history_days/weeks).
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [metric_date, metric_name]
+      # a flag can only be raised with enough history, and never without a z-score
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "not is_anomaly or robust_z is not null"
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "not is_actionable_anomaly or is_anomaly"
+    columns:
+      - name: metric_name
+        data_tests: [not_null]
+      - name: metric_kind
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [rate, latency, count, amount]
+      - name: baseline_spread
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                inclusive: false
+      - name: direction
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [high, low]
