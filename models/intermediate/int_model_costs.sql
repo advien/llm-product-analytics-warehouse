@@ -3,9 +3,10 @@
 
     `recorded_cost_usd` is what the orchestration service logged at call time.
     `calculated_cost_usd` is recomputed here from token counts and the price
-    list valid on the request date. The two disagree when the service used a
-    stale price (e.g. the day after a price change) - that is the drift the
-    `cost_reconciliation_within_tolerance` test guards.
+    list valid on the request date. The two disagree when the orchestration
+    service priced the call with its own (lagging) price sheet - that is the
+    drift the `assert_cost_mismatch_rate_within_slo` and
+    `warn_unreconciled_request_costs` tests guard.
 
     Tolerance: 0.5% relative OR $0.00001 absolute, whichever is larger, so the
     6-decimal rounding of sub-cent requests does not trip the check.

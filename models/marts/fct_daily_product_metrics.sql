@@ -12,12 +12,19 @@
 -#}
 with daily as (
     select * from {{ ref('int_daily_product_metrics') }}
+),
+
+last_full_day as (
+    -- the last day on which conversations were still being recorded; later
+    -- dates only carry spill-over requests from conversations that crossed midnight
+    select max(metric_date) as d from daily where n_conversations > 0
 )
 
 select
     metric_date,
     dayname(metric_date)                                            as day_of_week,
     date_trunc('week', metric_date)                                 as week_start_date,
+    metric_date > (select d from last_full_day)                     as is_partial_day,
 
     -- product health
     n_conversations,
