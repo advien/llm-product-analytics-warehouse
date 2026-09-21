@@ -6,20 +6,25 @@ on:
   pull_request:
   workflow_dispatch:
 
+# A newer push to the same branch cancels the run in flight
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           cache: pip
 
-      - name: Install dependencies
+      - name: Install dependencies (core only - no dashboard)
         run: pip install -r requirements.txt
 
       - name: Generate synthetic raw data
@@ -39,12 +44,35 @@ jobs:
         # defects + 2 visibility lists. Errors fail the job; warnings do not.
         run: dbt build --profiles-dir . --no-use-colors
 
-      - name: Upload run results
+      - name: dbt source freshness
+        # Landing tables were loaded seconds ago, so this must pass; it fails
+        # loudly if the loader stops stamping _loaded_at.
+        run: dbt source freshness --profiles-dir . --no-use-colors
+
+      - name: Summarise results
         if: always()
-        uses: actions/upload-artifact@v4
+        run: |
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, collections
+          r = json.load(open("target/run_results.json"))
+          c = collections.Counter(x["status"] for x in r["results"])
+          print("## dbt build")
+          print(f"| status | count |\n|---|---|")
+          for k in ("success", "pass", "warn", "error", "fail", "skipped"):
+              if c.get(k): print(f"| {k} | {c[k]} |")
+          warns = [x["unique_id"].split(".")[-1] for x in r["results"] if x["status"] == "warn"]
+          if warns:
+              print("\n**Warnings (expected on synthetic raw data):**\n")
+              for w in warns: print(f"- `{w}`")
+          PY
+
+      - name: Upload run artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
         with:
           name: dbt-target
           path: |
             target/run_results.json
             target/manifest.json
+            target/sources.json
           retention-days: 7

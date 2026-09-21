@@ -148,7 +148,7 @@ Requirements: Python 3.11+, ~200 MB disk. No database server needed.
 ```bash
 git clone https://github.com/advien/llm-product-analytics-warehouse.git && cd llm-product-analytics-warehouse
 python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+pip install -r requirements-dashboard.txt      # core + Streamlit; CI installs requirements.txt only
 cp profiles.example.yml profiles.yml
 
 python scripts/generate_synthetic_data.py   # ~4 s → data/raw/*.csv
@@ -221,6 +221,30 @@ is the write-up query.
   without spending time on a BI server. The same marts plug into Metabase or
   Evidence unchanged.
 
+## Platform alternatives and scaling paths
+
+DuckDB + a single `dbt build` is the right size for this dataset. The layered
+model is what carries over; the table below is what would actually change if
+the same warehouse had to serve real event volumes or more producers.
+
+| Concern | Here | Next step | What changes in this repo |
+|---|---|---|---|
+| **Storage / engine** | one DuckDB file | **Apache Iceberg tables on object storage, queried by Trino** (`dbt-trino`). Fits an event product best: append-only request/conversation feeds land as Iceberg partitions, late-arriving rows become a partition rewrite instead of a full rebuild, schema evolution is versioned, and snapshots/time-travel give a free audit trail for the reconciliation tests. | `profiles.yml` target; `stg_*` become incremental with `partition_by = request_date` and a look-back driven by `is_late_arriving`; DuckDB-only functions (`quantile_cont`, `mad`, `arg_max`, `filter (where …)`, `unnest(range(…))`) swap for Trino equivalents (`approx_percentile`, `max_by`, `if(…)`, `sequence`). Nothing in staging/intermediate/mart *logic* changes. |
+| | | **Postgres** (`dbt-postgres`) — if the goal is a shared, multi-writer dev database rather than scale | target + the same function swaps; marts stay tables, add indexes on `*_date` |
+| | | **BigQuery / Snowflake** — managed warehouse for a team that is not running Trino | target; partition/cluster config on the daily and request-grain marts |
+| **Ingestion** | `load_duckdb.py` reads CSV extracts | Kafka topics for `llm_requests` / `conversations` → Iceberg via Kafka Connect or Flink; batch feeds (prices, users) via Airbyte / Fivetran | the `raw` sources become Iceberg tables; `_ingested_at` comes from the stream, `_loaded_at` from the sink commit — the freshness and late-arrival logic already keys on exactly those two columns |
+| **Orchestration** | none — `dbt build` is the DAG | Dagster (asset-based, dbt models map 1:1 to software-defined assets) or Airflow with Cosmos | a schedule + sensors on source freshness; the workflow in `.github/workflows` already shows the run order |
+| **Data quality** | dbt tests + singular reconciliations | Elementary (test-result history, anomaly on test volume) or Great Expectations for cross-system checks (warehouse vs provider invoices) | the cost-reconciliation tests become invoice-vs-ledger checks against real billing exports |
+| **Metrics layer** | ratios computed in `fct_daily_product_metrics`, definitions in `docs/metric_definitions.md` | dbt Semantic Layer (MetricFlow): the additive components in `int_daily_product_metrics` are already the right shape for `measures`, the ratios become `metrics` | `semantic_models.yml` on top of the intermediate layer; the dashboard queries metrics instead of marts |
+| **Anomaly detection** | robust z-score in SQL | trend-aware baseline (STL / Prophet) as a Python model (`dbt-py` on Snowflake/BigQuery, or a Dagster asset), per-provider grain | `mart_daily_anomalies` keeps its output contract (`metric_date, metric_name, robust_z, is_anomaly`), only the baseline computation moves |
+| **Serving** | Streamlit | Metabase / Evidence.dev on the same marts; or the semantic layer above | none in the models — that is the point of the mart contract |
+
+The reason Iceberg + Trino is the first row: an LLM product emits a high-volume,
+append-only, late-arriving event stream with a schema that changes every time a
+model or provider is added. That is the workload Iceberg's partition rewrites,
+schema evolution and snapshots were designed for, and Trino lets the same dbt
+project read it alongside Postgres/Kafka sources without moving the data.
+
 ## Future improvements
 
 - Trend-aware anomaly baseline for spend (the current level-based baseline
@@ -231,12 +255,14 @@ is the write-up query.
   current detector works on product-level daily metrics).
 - Incremental `stg_llm_requests` / `fct_llm_requests` with a late-arrival
   look-back window.
-- A second target (BigQuery / Snowflake) to prove SQL portability.
+- A second target (Trino on Iceberg, or BigQuery) to prove the portability claimed above.
 
 ## Repository layout
 
 ```
 ├── dbt_project.yml, profiles.example.yml, packages.yml
+├── requirements.txt                  # core (what CI installs); -dashboard.txt adds Streamlit/Plotly
+├── .github/workflows/dbt-build.yml   # generate → load → dbt build → source freshness
 ├── scripts/
 │   ├── generate_synthetic_data.py   # seeded generator + defect injection + manifest
 │   ├── load_duckdb.py               # CSV → raw.* (all VARCHAR) + audit.messy_manifest

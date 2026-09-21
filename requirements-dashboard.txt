@@ -1,0 +1,6 @@
+# Dashboard layer, on top of requirements.txt
+-r requirements.txt
+streamlit>=1.35
+plotly>=5.22
+# Optional: README screenshots (also run `playwright install chromium`)
+playwright>=1.45
