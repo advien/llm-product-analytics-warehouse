@@ -59,6 +59,10 @@ MODELS = [
     ("google",    "gemini-2.5-flash",    "fast",    0.00030, 0.00250, (6.2, 0.38)),
 ]
 
+# The orchestration service ships its own price sheet; for these models it is
+# out of date relative to the finance price list (ratio old/new).
+LEGACY_PRICE_MULTIPLIER = {"gpt-4.1": 1.25, "claude-sonnet-4-5": 1.20, "gemini-2.5-flash": 1.50}
+
 # Which intents are "hard" and get routed to strong models more often
 HARD_INTENTS = {"transaction_dispute", "account_verification", "loan_inquiry", "payment_failed"}
 
@@ -77,6 +81,17 @@ ESCALATION_REASONS = {
     "fraud_suspected":       0.07,
     "llm_failure":           0.05,
 }
+# Intent-specific overrides of the escalation reason mix
+ESCALATION_REASONS_BY_INTENT = {
+    "transaction_dispute":  {"policy_requires_human": 0.55, "fraud_suspected": 0.20, "user_requested_agent": 0.15, "low_confidence": 0.05, "unresolved_after_retry": 0.03, "llm_failure": 0.02},
+    "account_verification": {"policy_requires_human": 0.65, "user_requested_agent": 0.15, "low_confidence": 0.10, "unresolved_after_retry": 0.05, "fraud_suspected": 0.03, "llm_failure": 0.02},
+    "card_block":           {"fraud_suspected": 0.35, "policy_requires_human": 0.30, "user_requested_agent": 0.20, "low_confidence": 0.08, "unresolved_after_retry": 0.05, "llm_failure": 0.02},
+    "app_login_issue":      {"unresolved_after_retry": 0.45, "user_requested_agent": 0.25, "low_confidence": 0.15, "llm_failure": 0.08, "policy_requires_human": 0.05, "fraud_suspected": 0.02},
+    "payment_failed":       {"unresolved_after_retry": 0.35, "user_requested_agent": 0.25, "low_confidence": 0.20, "policy_requires_human": 0.10, "llm_failure": 0.07, "fraud_suspected": 0.03},
+    "general_question":     {"low_confidence": 0.50, "user_requested_agent": 0.25, "unresolved_after_retry": 0.12, "llm_failure": 0.08, "policy_requires_human": 0.03, "fraud_suspected": 0.02},
+    "fee_question":         {"low_confidence": 0.35, "user_requested_agent": 0.30, "unresolved_after_retry": 0.20, "policy_requires_human": 0.08, "llm_failure": 0.05, "fraud_suspected": 0.02},
+    "loan_inquiry":         {"policy_requires_human": 0.50, "user_requested_agent": 0.25, "low_confidence": 0.15, "unresolved_after_retry": 0.05, "llm_failure": 0.03, "fraud_suspected": 0.02},
+}
 TEAMS = {"tier1_support": 0.55, "disputes": 0.20, "kyc_compliance": 0.15, "fraud_ops": 0.10}
 
 # Share of records that get each type of corruption
@@ -88,7 +103,7 @@ MESSY_RATES = {
     "unknown_model_name":         0.002,
     "resolved_and_escalated":     0.004,
     "late_arriving_request":      0.004,
-    "stale_price_cost":           0.010,  # cost_usd recorded with yesterday's price
+    "stale_price_cost":           0.010,  # cost_usd computed from a lagging price sheet
     "null_satisfaction":          0.35,   # not an error: users simply don't rate
 }
 
@@ -308,7 +323,10 @@ def gen_intent_predictions(rng, conv: pd.DataFrame) -> pd.DataFrame:
 def gen_escalations(rng, conv: pd.DataFrame) -> pd.DataFrame:
     esc = conv[conv["escalated"]].reset_index(drop=True)
     n = len(esc)
-    reasons = pick(rng, ESCALATION_REASONS, n)
+    reasons = np.array([
+        pick(rng, ESCALATION_REASONS_BY_INTENT.get(i, ESCALATION_REASONS), 1)[0]
+        for i in esc["initial_intent"]
+    ])
     team_by_intent = {
         "transaction_dispute": "disputes", "account_verification": "kyc_compliance",
     }
@@ -379,18 +397,14 @@ def corrupt(rng, conv: pd.DataFrame, req: pd.DataFrame, prices: pd.DataFrame):
     manifest += [("raw_llm_requests", "request_id", r, "late_arriving_request") for r in req.loc[idx, "request_id"]]
     touched.update(idx)
 
-    # 7. cost_usd computed with a stale (previous-day) price -> reconciliation drift
+    # 7. cost_usd logged with the orchestration service's embedded price sheet,
+    #    which lags the finance price list for some models -> reconciliation drift
     idx = sample(req, MESSY_RATES["stale_price_cost"], touched)
     sub = req.loc[idx]
-    prev_date = (pd.DatetimeIndex(sub["created_at"]) - pd.Timedelta(days=1)).date
-    lookup = prices.set_index(["price_date", "model_name"])[["input_price_per_1k_tokens", "output_price_per_1k_tokens"]]
-    p = lookup.reindex(pd.MultiIndex.from_arrays([prev_date, sub["model_name"]]))
-    stale_cost = (sub["prompt_tokens"].to_numpy() * p["input_price_per_1k_tokens"].to_numpy()
-                  + sub["completion_tokens"].to_numpy() * p["output_price_per_1k_tokens"].to_numpy()) / 1000.0
-    # First day has no previous price; fall back to a +7% drift instead
-    stale_cost = np.where(np.isnan(stale_cost), sub["cost_usd"].to_numpy() * 1.07, stale_cost)
-    req.loc[idx, "cost_usd"] = np.round(stale_cost, 6)
-    manifest += [("raw_llm_requests", "request_id", r, "stale_price_cost") for r in sub["request_id"]]
+    factor = sub["model_name"].map(LEGACY_PRICE_MULTIPLIER).fillna(1.0).to_numpy()
+    req.loc[idx, "cost_usd"] = np.round(sub["cost_usd"].to_numpy() * factor, 6)
+    affected = sub["request_id"][factor != 1.0]
+    manifest += [("raw_llm_requests", "request_id", r, "stale_price_cost") for r in affected]
 
     # 8. Conversations flagged both resolved-without-escalation AND escalated
     cidx = rng.choice(conv.index[conv["escalated"]], size=max(1, int(len(conv) * MESSY_RATES["resolved_and_escalated"])), replace=False)

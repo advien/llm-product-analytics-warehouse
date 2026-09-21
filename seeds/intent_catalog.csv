@@ -1,0 +1,13 @@
+intent,intent_category,risk_level,requires_human_policy,description
+balance_inquiry,account,low,false,User asks for current balance or recent activity
+transaction_dispute,disputes,high,true,User contests a charge or transaction
+card_block,cards,high,false,User wants to block or freeze a card
+card_delivery,cards,low,false,User asks where a physical card is
+payment_failed,payments,medium,false,A card or transfer payment was declined
+transfer_status,payments,medium,false,User asks about a pending or missing transfer
+account_verification,kyc,high,true,Identity or document verification questions
+loan_inquiry,lending,medium,false,Questions about loan eligibility or terms
+fee_question,account,low,false,Questions about fees and pricing
+app_login_issue,access,medium,false,User cannot log in or has 2FA issues
+limits_change,account,medium,false,User wants to change spending or transfer limits
+general_question,other,low,false,Anything that does not fit another intent

@@ -16,3 +16,28 @@ seeds:
         data_tests: [unique, not_null]
       - name: model_name_canonical
         data_tests: [not_null]
+
+  - name: intent_catalog
+    description: Business catalogue of intents the assistant is trained on, with category and risk tier.
+    config:
+      column_types:
+        requires_human_policy: boolean
+    columns:
+      - name: intent
+        data_tests: [unique, not_null]
+      - name: risk_level
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [low, medium, high]
+
+  - name: model_catalog
+    description: Models the product is allowed to call, with routing tier.
+    columns:
+      - name: model_name
+        data_tests: [unique, not_null]
+      - name: model_tier
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [fast, strong]

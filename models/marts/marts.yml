@@ -1,0 +1,241 @@
+version: 2
+
+models:
+  # ------------------------------------------------------------------ dims
+  - name: dim_users
+    description: One row per user with signup attributes and lifetime assistant usage.
+    columns:
+      - name: user_id
+        data_tests: [unique, not_null]
+      - name: segment
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [retail, premium, business]
+      - name: lifetime_llm_cost_usd
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+      - name: days_to_first_conversation
+        description: NULL for users who never used the assistant. Never negative - conversations cannot precede signup.
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+
+  - name: dim_models
+    description: One row per model in the catalogue with current price and usage summary.
+    columns:
+      - name: model_name
+        data_tests: [unique, not_null]
+      - name: model_provider
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [openai, anthropic, google]
+      - name: current_input_price_per_1k_tokens
+        description: Every catalogued model must be priced.
+        data_tests: [not_null]
+
+  - name: dim_intents
+    description: One row per intent in the business catalogue.
+    columns:
+      - name: intent
+        data_tests: [unique, not_null]
+      - name: n_conversations
+        description: Every catalogued intent should have been observed at least once in the window.
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 1
+
+  # ------------------------------------------------------------------ facts
+  - name: fct_conversations
+    description: >
+      One row per conversation with outcome, quality signals and LLM usage.
+      Primary dashboard table for product health and support operations.
+    columns:
+      - name: conversation_id
+        data_tests: [unique, not_null]
+      - name: user_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_users')
+                field: user_id
+      - name: initial_intent
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_intents')
+                field: intent
+      - name: resolution_status
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [auto_resolved, escalated, abandoned]
+      - name: cost_usd
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+    data_tests:
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "not (is_auto_resolved and is_escalated)"
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "(is_escalated and escalation_reason is not null) or (not is_escalated and escalation_reason is null)"
+
+  - name: fct_llm_requests
+    description: One row per deduplicated LLM request with reconciled cost and DQ lineage flags.
+    columns:
+      - name: request_id
+        data_tests: [unique, not_null]
+      - name: conversation_id
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('fct_conversations')
+                field: conversation_id
+      - name: model_name
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_models')
+                field: model_name
+      - name: cost_usd
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+      - name: latency_ms
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+
+  - name: fct_daily_product_metrics
+    description: Daily product KPIs. One row per calendar day.
+    columns:
+      - name: metric_date
+        data_tests: [unique, not_null]
+      - name: auto_resolution_rate
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 1
+      - name: escalation_rate
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 1
+      - name: error_rate
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 1
+      - name: intent_accuracy
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 1
+      - name: avg_satisfaction_score
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 1
+                max_value: 5
+      - name: total_cost_usd
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+    data_tests:
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "auto_resolution_rate + escalation_rate + abandonment_rate between 0.999 and 1.001"
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "p95_latency_ms >= avg_latency_ms"
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "p99_latency_ms >= p95_latency_ms and p95_latency_ms >= p50_latency_ms"
+
+  - name: fct_daily_model_costs
+    description: Daily cost ledger per model.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [request_date, model_provider, model_name]
+    columns:
+      - name: model_name
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_models')
+                field: model_name
+      - name: total_cost_usd
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+
+  # ------------------------------------------------------------------ dashboard marts
+  - name: mart_model_reliability_daily
+    description: Reliability metrics per model per day (error breakdown, latency percentiles).
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [request_date, model_provider, model_name]
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "n_error_requests + n_timeout_requests + n_rate_limited_requests = n_failed_requests"
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "p95_latency_ms >= avg_latency_ms"
+    columns:
+      - name: error_rate
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 1
+
+  - name: mart_intent_quality
+    description: Per-intent product, quality and cost summary.
+    columns:
+      - name: intent
+        data_tests: [unique, not_null]
+      - name: auto_resolution_rate
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 1
+      - name: escalation_rate
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 1
+      - name: intent_accuracy
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 1
+      - name: corrected_intent_rate
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 1

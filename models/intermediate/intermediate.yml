@@ -1,0 +1,96 @@
+version: 2
+
+models:
+  - name: int_model_costs
+    description: >
+      Request-grain cost reconciliation: logged cost vs cost recomputed from
+      tokens and the daily price list. See model header for the tolerance rule.
+    columns:
+      - name: request_id
+        data_tests: [unique, not_null]
+      - name: calculated_cost_usd
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+      - name: is_missing_price
+        description: Must never be true after alias mapping; a true value means a new model was shipped without a price row.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [false]
+                quote: false
+
+  - name: int_conversation_request_rollup
+    description: Conversation-grain aggregates of attached (non-orphan) LLM requests.
+    columns:
+      - name: conversation_id
+        data_tests:
+          - unique
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_conversations')
+                field: conversation_id
+      - name: n_requests
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 1
+    data_tests:
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "n_successful_requests + n_failed_requests = n_requests"
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "first_request_at <= last_request_at"
+
+  - name: int_conversation_quality
+    description: Conversation-grain intent-classification and escalation detail.
+    columns:
+      - name: conversation_id
+        data_tests: [unique, not_null]
+      - name: is_escalated_without_record
+        description: An escalated conversation must have a hand-off record.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [false]
+                quote: false
+      - name: has_record_without_escalation_flag
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [false]
+                quote: false
+
+  - name: int_daily_product_metrics
+    description: Additive daily components. One row per calendar day in the observed window.
+    columns:
+      - name: metric_date
+        data_tests: [unique, not_null]
+    data_tests:
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "n_auto_resolved + n_escalated + n_abandoned = n_conversations"
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "n_successful_requests + n_failed_requests = n_requests"
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "n_active_users <= n_conversations"
+
+  - name: int_intent_confusion
+    description: Confusion-matrix cells for the human-reviewed subset.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [actual_intent, predicted_intent]
+    columns:
+      - name: share_of_actual
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 1
