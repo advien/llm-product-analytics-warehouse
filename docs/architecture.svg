@@ -1,0 +1,99 @@
+<svg viewBox="0 0 680 600" xmlns="http://www.w3.org/2000/svg" width="680" height="600" role="img" aria-labelledby="ttl dsc" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif">
+<title id="ttl">LLM product analytics warehouse — layers and tests</title>
+<desc id="dsc">Raw event sources load verbatim into six raw tables, then run through six staging models that flag defects rather than dropping rows, five intermediate models that recompute and reconcile cost, and eleven marts that a Streamlit dashboard reads. One hundred and seventy dbt tests sit across the layers, with ten singular tests asserting cross-mart invariants.</desc>
+<style>
+  :root{
+    --card:#F4F2EC; --card-bd:#D3D1C7; --panel:#FAF9F5; --panel-bd:#E3E1D8;
+    --line:#9C9A92; --ink:#2C2C2A; --ink2:#5F5E5A;
+    --accent-bg:#FAECE7; --accent-bd:#F0997B; --accent-ink:#993C1D;
+  }
+  .t  { fill: var(--ink); }
+  .t2 { fill: var(--ink2); }
+  .title{ font-size:15.5px; font-weight:700; }
+  .sub  { font-size:12px; }
+  .note { font-size:11.5px; }
+  .panel{ fill: var(--panel); stroke: var(--panel-bd); stroke-width:1.5; }
+  .node { fill: var(--card); stroke: var(--card-bd); stroke-width:1.5; }
+  .hot  { fill: var(--accent-bg); stroke: var(--accent-bd); stroke-width:1.8; }
+  .conn { stroke: var(--line); stroke-width:2; fill:none; }
+  .dot  { stroke: var(--line); stroke-width:1.4; stroke-dasharray:2 4; fill:none; }
+  .hotnote { fill: var(--accent-ink); font-size:11.5px; font-weight:600; }
+  .cnt  { fill: var(--ink2); font-size:11px; font-weight:700; }
+</style>
+<defs>
+  <marker id="arw" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="var(--line)"/>
+  </marker>
+</defs>
+
+<text class="t title" x="34" y="34">LLM Product Analytics Warehouse — dbt + DuckDB</text>
+<text class="t2 sub"  x="34" y="54">Every number on the dashboard traces to one documented SQL expression.</text>
+
+<!-- raw -->
+<rect class="node" x="34" y="78" width="420" height="62" rx="10"/>
+<text class="t"  x="50" y="102" font-size="13.5" font-weight="700">raw — 6 source tables</text>
+<text class="t2 note" x="50" y="122">conversations · llm_requests · intents · escalations · users · prices</text>
+<text class="cnt" x="438" y="102" text-anchor="end">~99k requests · 90 days</text>
+
+<path class="conn" d="M244,140 L244,166" marker-end="url(#arw)"/>
+
+<!-- staging -->
+<rect class="node" x="34" y="168" width="420" height="58" rx="10"/>
+<text class="t"  x="50" y="192" font-size="13.5" font-weight="700">staging — 6 models</text>
+<text class="t2 note" x="50" y="211">cast · dedupe · flag every defect, never drop</text>
+
+<path class="conn" d="M244,226 L244,252" marker-end="url(#arw)"/>
+
+<!-- intermediate -->
+<rect class="hot" x="34" y="254" width="420" height="66" rx="10"/>
+<text x="50" y="278" font-size="13.5" font-weight="700" fill="var(--accent-ink)">intermediate — 5 models</text>
+<text class="hotnote" x="50" y="297">cost recomputed as tokens × price list,</text>
+<text class="hotnote" x="50" y="312">then reconciled against the value the service logged</text>
+
+<path class="conn" d="M244,320 L244,346" marker-end="url(#arw)"/>
+
+<!-- marts -->
+<rect class="node" x="34" y="348" width="420" height="72" rx="10"/>
+<text class="t"  x="50" y="372" font-size="13.5" font-weight="700">marts — 11 models</text>
+<text class="t2 note" x="50" y="391">facts: conversations · llm_requests · daily metrics · model costs · cohorts</text>
+<text class="t2 note" x="50" y="408">marts: intent quality · model reliability · daily anomalies</text>
+
+<path class="conn" d="M244,420 L244,446" marker-end="url(#arw)"/>
+
+<!-- dashboard -->
+<rect class="node" x="34" y="448" width="420" height="52" rx="10"/>
+<text class="t"  x="50" y="472" font-size="13.5" font-weight="700">Streamlit dashboard</text>
+<text class="t2 note" x="50" y="490">reads marts only — never raw, never staging</text>
+
+<!-- test rail -->
+<rect class="panel" x="480" y="78" width="166" height="422" rx="12"/>
+<text class="t" x="563" y="106" font-size="14" font-weight="700" text-anchor="middle">170 dbt tests</text>
+<path class="dot" d="M563,118 L563,140"/>
+<text class="t2 note" x="563" y="160" text-anchor="middle">160 generic</text>
+<text class="t2 note" x="563" y="177" text-anchor="middle">unique · not-null</text>
+<text class="t2 note" x="563" y="193" text-anchor="middle">relationships · ranges</text>
+<path class="dot" d="M500,212 L626,212"/>
+<text class="t" x="563" y="234" font-size="12.5" font-weight="700" text-anchor="middle">10 singular</text>
+<text class="t2 note" x="563" y="256" text-anchor="middle">marts agree on cost</text>
+<text class="t2 note" x="563" y="273" text-anchor="middle">to $0.0001 / day</text>
+<text class="t2 note" x="563" y="296" text-anchor="middle">no join fan-out in</text>
+<text class="t2 note" x="563" y="313" text-anchor="middle">conversation cost</text>
+<text class="t2 note" x="563" y="336" text-anchor="middle">accuracy consistent</text>
+<text class="t2 note" x="563" y="353" text-anchor="middle">across marts</text>
+<text class="t2 note" x="563" y="376" text-anchor="middle">cohort sizes match</text>
+<text class="t2 note" x="563" y="393" text-anchor="middle">an independent count</text>
+<path class="dot" d="M500,412 L626,412"/>
+<text class="hotnote" x="563" y="436" text-anchor="middle">detector must flag</text>
+<text class="hotnote" x="563" y="452" text-anchor="middle">the planted provider</text>
+<text class="hotnote" x="563" y="468" text-anchor="middle">incident — and stay</text>
+<text class="hotnote" x="563" y="484" text-anchor="middle">quiet elsewhere</text>
+
+<path class="dot" d="M454,199 L480,199"/>
+<path class="dot" d="M454,287 L480,287"/>
+<path class="dot" d="M454,384 L480,384"/>
+
+<!-- footnote -->
+<rect class="panel" x="34" y="520" width="612" height="52" rx="10"/>
+<text class="t2 note" x="50" y="544">Raw data is synthetic and deliberately broken: duplicate ids, negative latency, token sums that</text>
+<text class="t2 note" x="50" y="561">do not add up, prices missing for preview aliases, late arrivals. Each defect is flagged, not dropped.</text>
+</svg>
